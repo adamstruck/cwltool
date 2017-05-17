@@ -13,5 +13,5 @@ fi
 pushd common-workflow-language
 ./run_test.sh $TEST RUNNER=$BDIR/cwltool-tes DRAFT=v1.0
 # ./run_test.sh $TEST RUNNER=/usr/local/bin/cwltool DRAFT=v1.0
-rm -rf v1.0[0-9a-zA-Z_]*
+# rm -rf v1.0[0-9a-zA-Z_]*
 popd

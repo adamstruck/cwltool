@@ -28,14 +28,14 @@ class TESService:
         self.addr = addr
 
     def submit(self, task):
-        r = requests.post("%s/v1/tasks" % (self.addr), json=task)
+        r = requests.post('%s/v1/tasks' % (self.addr), json=task)
         data = r.json()
         if 'Error' in data:
-            raise Exception("Request Error: %s" % (data['Error']))
+            raise Exception('Request Error: %s' % (data['Error']))
         return data['id']
 
     def get_job(self, task_id):
-        r = requests.get("%s/v1/tasks/%s" % (self.addr, task_id))
+        r = requests.get('%s/v1/tasks/%s' % (self.addr, task_id))
         return r.json()
 
 
@@ -45,8 +45,8 @@ class TESPipeline(Pipeline):
         super(TESPipeline, self).__init__()
         self.kwargs = kwargs
         self.service = TESService(url)
-        if kwargs.get("basedir") is not None:
-            self.basedir = kwargs.get("basedir")
+        if kwargs.get('basedir') is not None:
+            self.basedir = kwargs.get('basedir')
         else:
             self.basedir = os.getcwd()
         self.fs_access = StdFsAccess(self.basedir)
@@ -81,7 +81,7 @@ class TESPipelineJob(PipelineJob):
     def __init__(self, spec, pipeline, fs_access):
         super(TESPipelineJob, self).__init__(spec, pipeline)
         self.running = True
-        self.docker_workdir = "/var/spool/cwl"
+        self.docker_workdir = '/var/spool/cwl'
         self.fs_access = fs_access
 
     def create_parameters(self, puts, output=False):
@@ -92,7 +92,7 @@ class TESPipelineJob(PipelineJob):
                 if ent is not None:
                     parameter = {
                         'name': put,
-                        'description': "cwl_input:%s" % (put),
+                        'description': 'cwl_input:%s' % (put),
                         'url': ent.resolved,
                         'path': ent.target
                     }
@@ -100,7 +100,7 @@ class TESPipelineJob(PipelineJob):
             else:
                 parameter = {
                     'name': put,
-                    'description': "cwl_output:%s" % (put),
+                    'description': 'cwl_output:%s' % (put),
                     'url': self.output2url(path),
                     'path': self.output2path(path)
                 }
@@ -118,43 +118,50 @@ class TESPipelineJob(PipelineJob):
         if stdout_path is not None:
             parameter = {
                 'name': 'stdout',
-                'description': 'tool stdout',
                 'url': self.output2url(stdout_path),
-                'path': self.output2path(stdout_path)
+                'path': self.output2path(stdout_path),
+                'type': 'FILE'
             }
             output_parameters.append(parameter)
 
         if stderr_path is not None:
             parameter = {
                 'name': 'stderr',
-                'description': 'tool stderr',
                 'url': self.output2url(stderr_path),
-                'path': self.output2path(stderr_path)
+                'path': self.output2path(stderr_path),
+                'type': 'FILE'
             }
             output_parameters.append(parameter)
 
         container = self.find_docker_requirement()
 
-        reqs = self.spec.get("requirements", []) + self.spec.get("hints", [])
+        reqs = self.spec.get('requirements', []) + self.spec.get('hints', [])
         for i in reqs:
-            if i.get("class", "NA") == "ResourceRequirement":
-                cpus = i.get("coresMin", i.get("coresMax", None))
-                ram = i.get("ramMin", i.get("ramMax", None))
-                disk = i.get("outdirMin", i.get("outdirMax", None))
+            if i.get('class', 'NA') == 'ResourceRequirement':
+                cpus = i.get('coresMin', i.get('coresMax', None))
+                ram = i.get('ramMin', i.get('ramMax', None))
+                disk = i.get('outdirMin', i.get('outdirMax', None))
 
         resources = {}
         if cpus is not None:
-            resources["cpu_cores"] = cpus
+            resources['cpu_cores'] = cpus
 
         if ram is not None:
-            resources["ram_gb"] = ram
+            resources['ram_gb'] = ram
 
         if disk is not None:
-            resources["size_gb"] = disk
+            resources['size_gb'] = disk
+
+        output_parameters.append({
+            'name': 'workdir',
+            'url': self.output2url(''),
+            'path': self.docker_workdir,
+            'type': 'DIRECTORY',
+        })
 
         create_body = {
-            'name': self.spec.get("name", self.spec.get("id", "cwltool-tes task")),
-            'description': self.spec.get("doc", ""),
+            'name': self.spec.get('name', self.spec.get('id', 'cwltool-tes task')),
+            'description': self.spec.get('doc', ''),
             'executors': [{
                 'cmd': command,
                 'image_name': container,
@@ -171,8 +178,8 @@ class TESPipelineJob(PipelineJob):
 
 
     def run(self, pull_image=True, rm_container=True, rm_tmpdir=True,
-            move_outputs="move", **kwargs):
-        docid = self.spec.get("id")
+            move_outputs='move', **kwargs):
+        docid = self.spec.get('id')
 
         log.debug('DIR JOB ----------------------')
         log.debug(pformat(self.__dict__))
@@ -229,38 +236,43 @@ class TESPipelineJob(PipelineJob):
         log.debug('COLLECTING OUTPUTS ------------------')
 
         final = {}
-        for output in self.spec['outputs']:
-            if output['type'] == 'File':
-                outid = output['id'].replace(self.spec['id'] + '#', '')
-                binding = output['outputBinding']['glob']
-                log.debug('BINDING: ' + self.fs_access.join(self.outdir, binding))
-                glob = self.fs_access.glob(self.fs_access.join(self.outdir, binding))
-                log.debug('GLOB: ' + pformat(glob))
-                if len(glob) == 0:
-                    self.running = False
-                    raise WorkflowException(
-                        "Output processing failed. File not found: %s" %
-                        self.fs_access.join(self.outdir, binding)
-                    )
-                # with self.fs_access.open(glob[0], 'rb') as handle:
-                #     contents = handle.read()
-                #     checksum = hashlib.sha1(contents)
-                #     hex = "sha1$%s" % checksum.hexdigest()
-                p = self.fs_access._abs(glob[0])
-                collect = {
-                    'basename': os.path.basename(p),
-                    'dirname': os.path.dirname(p),
-                    'location': file_uri(p),
-                    'path': p,
-                    'class': 'File',
-                    'size': os.path.getsize(p),
-                }
-                final[outid] = collect
+        output_manifest = self.fs_access.join(self.outdir, 'cwl.output.json')
+        if self.fs_access.exists(output_manifest):
+            with open(output_manifest, 'rb') as fh:
+                contents = json.loads(fh.read())
+                final.update(contents)
+        else:
+            for output in self.spec['outputs']:
+                if output['type'] == 'File':
+                    outid = output['id'].replace(self.spec['id'] + '#', '')
+                    binding = output['outputBinding']['glob']
+                    log.debug('BINDING: ' + self.fs_access.join(self.outdir, binding))
+                    glob = self.fs_access.glob(self.fs_access.join(self.outdir, binding))
+                    log.debug('GLOB: ' + pformat(glob))
+                    if len(glob) == 0:
+                        self.running = False
+                        raise WorkflowException(
+                            'Output processing failed. File not found: %s' %
+                            self.fs_access.join(self.outdir, binding)
+                        )
+                    # with self.fs_access.open(glob[0], 'rb') as handle:
+                    #     contents = handle.read()
+                    #     checksum = hashlib.sha1(contents)
+                    #     hex = 'sha1$%s' % checksum.hexdigest()
+                    p = self.fs_access._abs(glob[0])
+                    collect = {
+                        'basename': os.path.basename(p),
+                        'dirname': os.path.dirname(p),
+                        'location': file_uri(p),
+                        'path': p,
+                        'class': 'File',
+                        'size': os.path.getsize(p),
+                    }
+                    final[outid] = collect
 
-        output_manifest = self.fs_access.join(self.outdir, "cwl.output.json")
-        with open(output_manifest, 'w') as fh:
-            cwl_output = json.dumps(final)
-            fh.write(cwl_output)
+            with open(output_manifest, 'w') as fh:
+                cwl_output = json.dumps(final)
+                fh.write(cwl_output)
 
         log.debug('COLLECTED OUTPUTS ------------------')
         log.debug(pformat(final))
@@ -290,7 +302,7 @@ class TESPipelinePoll(PollThread):
         return self.service.get_job(self.operation['id'])
 
     def is_done(self, operation):
-        terminal_states = ['COMPLETE', 'CANCELED', 'ERROR', "SYSTEM_ERROR"]
+        terminal_states = ['COMPLETE', 'CANCELED', 'ERROR', 'SYSTEM_ERROR']
         return operation['state'] in terminal_states
 
     def complete(self, operation):
