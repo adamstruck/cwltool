@@ -38,6 +38,7 @@ def add_args(parser):
     parser.add_argument(
         "--tes",
         type=str,
+        default="http://localhost:8000",
         help="GA4GH TES Service URL"
     )
     return parser

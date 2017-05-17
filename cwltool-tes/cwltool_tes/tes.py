@@ -45,9 +45,10 @@ class TESPipeline(Pipeline):
         super(TESPipeline, self).__init__()
         self.kwargs = kwargs
         self.service = TESService(url)
-        self.basedir = kwargs.get("basedir", os.getcwd())
-        # self.outdir = self.pipeline.kwargs.get("outdir", os.getcwd())
-        # self.tmpdir = self.pipeline.kwargs.get("tmpdir_prefix", os.path.join(os.getcwd(), "tmp"))
+        if kwargs.get("basedir") is not None:
+            self.basedir = kwargs.get("basedir")
+        else:
+            self.basedir = os.getcwd()
         self.fs_access = StdFsAccess(self.basedir)
 
     def make_exec_tool(self, spec, **kwargs):
@@ -79,11 +80,9 @@ class TESPipelineJob(PipelineJob):
 
     def __init__(self, spec, pipeline, fs_access):
         super(TESPipelineJob, self).__init__(spec, pipeline)
-        self.running = False
-        self.fs_access = fs_access
+        self.running = True
         self.docker_workdir = "/var/spool/cwl"
-        self.outdir = self.pipeline.kwargs.get("outdir", os.getcwd())
-        self.basedir = self.pipeline.kwargs.get("basedir", os.getcwd())
+        self.fs_access = fs_access
 
     def create_parameters(self, puts, output=False):
         parameters = []
@@ -173,7 +172,7 @@ class TESPipelineJob(PipelineJob):
 
     def run(self, pull_image=True, rm_container=True, rm_tmpdir=True,
             move_outputs="move", **kwargs):
-        id = self.spec.get("id")
+        docid = self.spec.get("id")
 
         log.debug('DIR JOB ----------------------')
         log.debug(pformat(self.__dict__))
@@ -192,7 +191,7 @@ class TESPipelineJob(PipelineJob):
         log.debug('SPEC_OUTPUTS ----------------------')
         log.debug(pformat(self.spec['outputs']))
 
-        outputs = {output['id'].replace(id + '#', ''): output['outputBinding']['glob']
+        outputs = {output['id'].replace(docid + '#', ''): output['outputBinding']['glob']
                    for output in self.spec['outputs'] if 'outputBinding' in output}
 
         log.debug('PRE_OUTPUTS----------------------')
@@ -211,53 +210,63 @@ class TESPipelineJob(PipelineJob):
         log.debug('SUBMITTED TASK ----------------------')
 
         operation = self.pipeline.service.get_job(task_id)
-        collected = {}
 
         poll = TESPipelinePoll(
             service=self.pipeline.service,
             operation=operation,
-            outputs=collected,
             callback=self.jobCleanup
         )
 
         self.pipeline.add_thread(poll)
         poll.start()
 
-    def jobCleanup(self, operation, outputs):
-        log.debug('COLLECTED OUTPUTS ------------------')
-        log.debug(pformat(outputs))
+        while True:
+            if not self.running:
+                log.debug('TASK COMPLETE ------------------')
+                break
+
+    def jobCleanup(self, operation):
+        log.debug('COLLECTING OUTPUTS ------------------')
 
         final = {}
-        output_manifest = self.fs_access.join(self.outdir, "cwl.output.json")
-        if self.fs_access.exists(output_manifest):
-            log.debug("Found cwl.output.json file")
-            with self.fs_access.open(output_manifest, 'r') as args:
-                cwl_output = json.loads(args.read())
-            final.update(cwl_output)
-
         for output in self.spec['outputs']:
-            try:
-                if output['type'] == 'File':
-                    id = output['id'].replace(self.spec['id'] + '#', '')
-                    binding = output['outputBinding']['glob']
-                    glob = self.fs_access.glob(binding)
-                    log.debug('GLOB: ' + pformat(glob))
-                    with self.fs_access.open(glob[0], 'rb') as handle:
-                        contents = handle.read()
-                        size = len(contents)
-                        checksum = hashlib.sha1(contents)
-                        hex = "sha1$%s" % checksum.hexdigest()
-                        collect = {
-                            'location': os.path.basename(glob[0]),
-                            'class': 'File',
-                            'size': size,
-                            'checksum': hex
-                        }
-                    final[id] = collect
-            except:
-                continue
+            if output['type'] == 'File':
+                outid = output['id'].replace(self.spec['id'] + '#', '')
+                binding = output['outputBinding']['glob']
+                log.debug('BINDING: ' + self.fs_access.join(self.outdir, binding))
+                glob = self.fs_access.glob(self.fs_access.join(self.outdir, binding))
+                log.debug('GLOB: ' + pformat(glob))
+                if len(glob) == 0:
+                    self.running = False
+                    raise WorkflowException(
+                        "Output processing failed. File not found: %s" %
+                        self.fs_access.join(self.outdir, binding)
+                    )
+                # with self.fs_access.open(glob[0], 'rb') as handle:
+                #     contents = handle.read()
+                #     checksum = hashlib.sha1(contents)
+                #     hex = "sha1$%s" % checksum.hexdigest()
+                p = self.fs_access._abs(glob[0])
+                collect = {
+                    'basename': os.path.basename(p),
+                    'dirname': os.path.dirname(p),
+                    'location': file_uri(p),
+                    'path': p,
+                    'class': 'File',
+                    'size': os.path.getsize(p),
+                }
+                final[outid] = collect
+
+        output_manifest = self.fs_access.join(self.outdir, "cwl.output.json")
+        with open(output_manifest, 'w') as fh:
+            cwl_output = json.dumps(final)
+            fh.write(cwl_output)
+
+        log.debug('COLLECTED OUTPUTS ------------------')
+        log.debug(pformat(final))
 
         self.output_callback(final, 'success')
+        self.running = False
 
     def output2url(self, path):
         if path is not None:
@@ -272,10 +281,9 @@ class TESPipelineJob(PipelineJob):
 
 class TESPipelinePoll(PollThread):
 
-    def __init__(self, service, operation, outputs, callback):
+    def __init__(self, service, operation, callback):
         super(TESPipelinePoll, self).__init__(operation)
         self.service = service
-        self.outputs = outputs
         self.callback = callback
 
     def poll(self):
@@ -286,4 +294,4 @@ class TESPipelinePoll(PollThread):
         return operation['state'] in terminal_states
 
     def complete(self, operation):
-        self.callback(operation, self.outputs)
+        self.callback(operation)

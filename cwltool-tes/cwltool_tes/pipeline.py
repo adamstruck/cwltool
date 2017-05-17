@@ -6,32 +6,12 @@ from pprint import pformat
 from cwltool.errors import WorkflowException
 
 log = logging.getLogger('funnel')
-DEFAULT_IMAGE = "ubuntu:16.04"
 
 
 class Pipeline(object):
 
     def __init__(self):
         self.threads = []
-
-    def create_task(self,
-                    container,
-                    command,
-                    inputs,
-                    outputs,
-                    volumes,
-                    config):
-        """
-        Given a cwl spec and job create a engine task and pass back data structure
-        to use for submission
-        """
-        raise Exception("Pipeline.create_task() not implemented")
-
-    def run_task(self, task):
-        raise Exception("Pipeline.run_task() not implemented")
-
-    def configure(self, args):
-        return args
 
     def executor(self, tool, job_order, **kwargs):
         log.debug(kwargs)
@@ -90,10 +70,10 @@ class PipelineJob(object):
         self.running = False
 
     def find_docker_requirement(self):
-        default = "ubuntu"
+        default = "ubuntu:14.04"
         container = default
         if self.pipeline.kwargs["default_container"]:
-            default = self.pipeline.kwargs["default_container"]
+            container = self.pipeline.kwargs["default_container"]
 
         reqs = self.spec.get("requirements", []) + self.spec.get("hints", [])
         for i in reqs:

@@ -12,7 +12,6 @@ class PollThread(threading.Thread):
         super(PollThread, self).__init__()
         self.operation = operation
         self.poll_interval = poll_interval
-        self.success = None
 
     def poll(self):
         raise Exception('PollThread.poll() not implemented')
@@ -30,14 +29,9 @@ class PollThread(threading.Thread):
             # if self.poll_interval < 30:
             #     self.poll_interval += 1
             log.debug(
-                'POLLING ' + pformat(
-                    self.operation.get('name', self.operation.get('jobId', "NA"))
-                )
+                'POLLING ' + pformat(self.operation.get('id', "NA"))
             )
 
             self.operation = self.poll()
 
-        log.debug(pformat(self.operation))
-
-        self.success = self.operation
         self.complete(self.operation)
