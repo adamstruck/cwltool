@@ -3,16 +3,17 @@ import json
 import shutil
 import logging
 import hashlib
-from pprint import pformat
 
-import cwltool.draft2tool
-from cwltool.pathmapper import MapperEnt, dedup
+from cwltool.draft2tool import CommandLineTool
+from cwltool.pathmapper import MapperEnt, PathMapper, dedup
 from cwltool.stdfsaccess import StdFsAccess
+from cwltool.workflow import defaultMakeTool
 
 from pipeline import Pipeline, PipelineJob
 from poll import PollThread
+from pprint import pformat
 
-from schema_salad.ref_resolver import file_uri
+from schema_salad.ref_resolver import file_uri, uri_file_path
 
 try:
     import requests
@@ -58,9 +59,9 @@ class TESPipeline(Pipeline):
         if 'class' in spec and spec['class'] == 'CommandLineTool':
             return self.make_exec_tool(spec, **kwargs)
         else:
-            return cwltool.workflow.defaultMakeTool(spec, **kwargs)
+            return defaultMakeTool(spec, **kwargs)
 
-class TESPipelineTool(cwltool.draft2tool.CommandLineTool):
+class TESPipelineTool(CommandLineTool):
 
     def __init__(self, spec, pipeline, fs_access, **kwargs):
         super(TESPipelineTool, self).__init__(spec, **kwargs)
@@ -72,9 +73,7 @@ class TESPipelineTool(cwltool.draft2tool.CommandLineTool):
         return TESPipelineJob(self.spec, self.pipeline, self.fs_access)
 
     def makePathMapper(self, reffiles, stagedir, **kwargs):
-        return cwltool.pathmapper.PathMapper(
-            reffiles, kwargs['basedir'], stagedir
-        )
+        return PathMapper(reffiles, kwargs['basedir'], stagedir)
 
 class TESPipelineJob(PipelineJob):
 
@@ -107,34 +106,64 @@ class TESPipelineJob(PipelineJob):
 
         return parameters
 
-    def create_task(self, command, inputs, outputs):
+    def create_task(self):
+        inputs = {}
+        for k, v in self.joborder.items():
+            if isinstance(v, dict):
+                inputs[k] = v['location']
 
         input_parameters = self.create_parameters(inputs)
+
+        # manage InitialWorkDirRequirement file generation
+        for listing in self.generatefiles['listing']:
+            if listing['class'] == 'File':
+                loc = self.fs_access.join(self.tmpdir, listing['basename'])
+                with self.fs_access.open(loc, 'wb') as gen:
+                    gen.write(listing['contents'])
+                parameter = {
+                    'name': listing['basename'],
+                    'description': 'cwl_generated_input:%s' % (loc),
+                    'url': file_uri(loc),
+                    'path': self.fs_access.join(self.docker_workdir, listing['basename'])
+                }
+                input_parameters.append(parameter)
+
+        docid = self.spec.get('id')
+        outputs = {output['id'].replace(docid + '#', ''): output['outputBinding']['glob']
+                   for output in self.spec['outputs'] if 'outputBinding' in output}
+
         output_parameters = self.create_parameters(outputs, True)
 
-        stdout_path = self.spec.get('stdout', None)
-        stderr_path = self.spec.get('stderr', None)
-
-        if stdout_path is not None:
+        if self.stdout is not None:
             parameter = {
                 'name': 'stdout',
-                'url': self.output2url(stdout_path),
-                'path': self.output2path(stdout_path),
+                'url': self.output2url(self.stdout),
+                'path': self.output2path(self.stdout),
                 'type': 'FILE'
             }
             output_parameters.append(parameter)
 
-        if stderr_path is not None:
+        if self.stderr is not None:
             parameter = {
                 'name': 'stderr',
-                'url': self.output2url(stderr_path),
-                'path': self.output2path(stderr_path),
+                'url': self.output2url(self.stderr),
+                'path': self.output2path(self.stderr),
                 'type': 'FILE'
             }
             output_parameters.append(parameter)
+
+        output_parameters.append({
+            'name': 'workdir',
+            'url': self.output2url(''),
+            'path': self.docker_workdir,
+            'type': 'DIRECTORY',
+        })
 
         container = self.find_docker_requirement()
 
+        cpus = None
+        ram = None
+        disk = None
         reqs = self.spec.get('requirements', []) + self.spec.get('hints', [])
         for i in reqs:
             if i.get('class', 'NA') == 'ResourceRequirement':
@@ -152,22 +181,16 @@ class TESPipelineJob(PipelineJob):
         if disk is not None:
             resources['size_gb'] = disk
 
-        output_parameters.append({
-            'name': 'workdir',
-            'url': self.output2url(''),
-            'path': self.docker_workdir,
-            'type': 'DIRECTORY',
-        })
-
         create_body = {
-            'name': self.spec.get('name', self.spec.get('id', 'cwltool-tes task')),
+            'name': self.name,
             'description': self.spec.get('doc', ''),
             'executors': [{
-                'cmd': command,
+                'cmd': self.command_line,
                 'image_name': container,
                 'workdir': self.docker_workdir,
-                'stdout': self.output2path(stdout_path),
-                'stderr': self.output2path(stderr_path)
+                'stdout': self.output2path(self.stdout),
+                'stderr': self.output2path(self.stderr),
+                'stdin': self.stdin
             }],
             'inputs': input_parameters,
             'outputs': output_parameters,
@@ -179,36 +202,10 @@ class TESPipelineJob(PipelineJob):
 
     def run(self, pull_image=True, rm_container=True, rm_tmpdir=True,
             move_outputs='move', **kwargs):
-        docid = self.spec.get('id')
-
         log.debug('DIR JOB ----------------------')
         log.debug(pformat(self.__dict__))
 
-        # prep the inputs
-        inputs = {}
-        for k, v in self.joborder.items():
-            if isinstance(v, dict):
-                inputs[k] = v['location']
-
-        for listing in self.generatefiles['listing']:
-            if listing['class'] == 'File':
-                with self.fs_access.open(listing['basename'], 'wb') as gen:
-                    gen.write(listing['contents'])
-
-        log.debug('SPEC_OUTPUTS ----------------------')
-        log.debug(pformat(self.spec['outputs']))
-
-        outputs = {output['id'].replace(docid + '#', ''): output['outputBinding']['glob']
-                   for output in self.spec['outputs'] if 'outputBinding' in output}
-
-        log.debug('PRE_OUTPUTS----------------------')
-        log.debug(pformat(outputs))
-
-        task = self.create_task(
-            command=self.command_line,
-            inputs=inputs,
-            outputs=outputs
-        )
+        task = self.create_task()
 
         log.debug('CREATED TASK MSG----------------------')
         log.debug(pformat(task))
@@ -218,10 +215,21 @@ class TESPipelineJob(PipelineJob):
 
         operation = self.pipeline.service.get_job(task_id)
 
+        def callback(operation):
+            try:
+                outputs = self.collect_outputs(self.outdir)
+                log.debug('FINAL OUTPUTS ------------------')
+                log.debug(pformat(outputs))
+                self.output_callback(outputs, 'success')
+            except Exception as e:
+                raise e
+            finally:
+                self.running = False
+
         poll = TESPipelinePoll(
             service=self.pipeline.service,
             operation=operation,
-            callback=self.jobCleanup
+            callback=callback
         )
 
         self.pipeline.add_thread(poll)
@@ -229,56 +237,18 @@ class TESPipelineJob(PipelineJob):
 
         while True:
             if not self.running:
-                log.debug('TASK COMPLETE ------------------')
+                log.debug('STARTING CLEAN UP ------------------')
                 break
 
-    def jobCleanup(self, operation):
-        log.debug('COLLECTING OUTPUTS ------------------')
+        if self.stagedir and os.path.exists(self.stagedir):
+            log.debug('[job %s] Removing input staging directory %s', self.name, self.stagedir)
+            shutil.rmtree(self.stagedir, True)
 
-        final = {}
-        output_manifest = self.fs_access.join(self.outdir, 'cwl.output.json')
-        if self.fs_access.exists(output_manifest):
-            with open(output_manifest, 'rb') as fh:
-                contents = json.loads(fh.read())
-                final.update(contents)
-        else:
-            for output in self.spec['outputs']:
-                if output['type'] == 'File':
-                    outid = output['id'].replace(self.spec['id'] + '#', '')
-                    binding = output['outputBinding']['glob']
-                    log.debug('BINDING: ' + self.fs_access.join(self.outdir, binding))
-                    glob = self.fs_access.glob(self.fs_access.join(self.outdir, binding))
-                    log.debug('GLOB: ' + pformat(glob))
-                    if len(glob) == 0:
-                        self.running = False
-                        raise WorkflowException(
-                            'Output processing failed. File not found: %s' %
-                            self.fs_access.join(self.outdir, binding)
-                        )
-                    # with self.fs_access.open(glob[0], 'rb') as handle:
-                    #     contents = handle.read()
-                    #     checksum = hashlib.sha1(contents)
-                    #     hex = 'sha1$%s' % checksum.hexdigest()
-                    p = self.fs_access._abs(glob[0])
-                    collect = {
-                        'basename': os.path.basename(p),
-                        'dirname': os.path.dirname(p),
-                        'location': file_uri(p),
-                        'path': p,
-                        'class': 'File',
-                        'size': os.path.getsize(p),
-                    }
-                    final[outid] = collect
+        if rm_tmpdir:
+            log.debug('[job %s] Removing temporary directory %s', self.name, self.tmpdir)
+            shutil.rmtree(self.tmpdir, True)
 
-            with open(output_manifest, 'w') as fh:
-                cwl_output = json.dumps(final)
-                fh.write(cwl_output)
-
-        log.debug('COLLECTED OUTPUTS ------------------')
-        log.debug(pformat(final))
-
-        self.output_callback(final, 'success')
-        self.running = False
+        log.debug('JOB COMPLETE------------------')
 
     def output2url(self, path):
         if path is not None:

@@ -70,7 +70,7 @@ class PipelineJob(object):
         self.running = False
 
     def find_docker_requirement(self):
-        default = "ubuntu:14.04"
+        default = "python:2.7"
         container = default
         if self.pipeline.kwargs["default_container"]:
             container = self.pipeline.kwargs["default_container"]
