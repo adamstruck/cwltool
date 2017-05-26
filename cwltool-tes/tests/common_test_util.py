@@ -55,6 +55,9 @@ class SimpleServerTest(unittest.TestCase):
     def setUp(self):
         self.addCleanup(self.cleanup)
         self.testdir = os.path.dirname(os.path.realpath(__file__))
+        self.rootprojectdir = os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.realpath(__file__)
+        )))
         self.tmpdir = os.path.join(self.testdir, "test_tmp")
         if not os.path.exists(self.tmpdir):
             os.mkdir(self.tmpdir)
@@ -76,7 +79,7 @@ class SimpleServerTest(unittest.TestCase):
             "WorkDir": self.funnel_work_dir,
             "Storage": [{
                 "Local": {
-                    "AllowedDirs": [self.storage_dir]
+                    "AllowedDirs": [self.rootprojectdir]
                 }
             }],
             "LogLevel": "debug",
