@@ -9,7 +9,9 @@ python:
     #  - 3.6
 os:
   - linux
-  
+
+before_install:
+  - git submodule update --init --recursive
 install:
   # - pip install tox-travis
   - pip install -r ./cwltool-tes/tests/requirements.txt
