@@ -9,14 +9,15 @@ python:
     #  - 3.6
 os:
   - linux
-
-before_install:
-  - docker pull python:2.7
-  - wget https://github.com/ohsu-comp-bio/funnel/releases/download/dev/funnel-linux-amd64.tar.gz
-  - tar xfz funnel-linux-amd64.tar.gz -C /usr/bin
+  
 install:
   - pip install tox-travis
   - pip install nose
+before_script:
+  - docker pull python:2.7
+  - wget https://github.com/ohsu-comp-bio/funnel/releases/download/dev/funnel-linux-amd64.tar.gz -O /tmp/funnel-linux-amd64.tar.gz
+  - tar xfz /tmp/funnel-linux-amd64.tar.gz
+  - export PATH=$PATH:/tmp
 script: 
   - tox
   - nosetests -w ./cwltool-tes/tests
