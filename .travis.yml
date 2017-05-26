@@ -16,10 +16,9 @@ install:
 before_script:
   - docker pull python:2.7
   - wget https://github.com/ohsu-comp-bio/funnel/releases/download/dev/funnel-linux-amd64.tar.gz -O /tmp/funnel-linux-amd64.tar.gz
-  - tar xfz /tmp/funnel-linux-amd64.tar.gz
-  - export PATH=$PATH:/tmp
+  - tar xfz /tmp/funnel-linux-amd64.tar.gz -C /usr/local/bin
 script: 
-  - tox
+  #- tox
   - nosetests -w ./cwltool-tes/tests
 notifications:
   email: false
