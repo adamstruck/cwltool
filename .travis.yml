@@ -15,6 +15,7 @@ before_install:
 install:
   # - pip install tox-travis
   - pip install -r ./cwltool-tes/tests/requirements.txt
+  - pip install -r ./cwltool-tes/requirements.txt
 before_script:
   - wget https://github.com/ohsu-comp-bio/funnel/releases/download/dev/funnel-linux-amd64.tar.gz -O /tmp/funnel-linux-amd64.tar.gz
   - tar -zxvf /tmp/funnel-linux-amd64.tar.gz -C /tmp
