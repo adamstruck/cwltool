@@ -315,7 +315,6 @@ class TESPipelinePoll(PollThread):
 
     def is_done(self, operation):
         terminal_states = ['COMPLETE', 'CANCELED', 'ERROR', 'SYSTEM_ERROR']
-        log.debug("is_done: %s" % (pformat(operation)))
         if 'state' in operation:
             if operation['state'] in terminal_states:
                 log.debug('[job %s] JOB %s ------------------' %
